@@ -25,7 +25,7 @@ from pykdl_utils.kdl_parser import kdl_tree_from_urdf_model
 from pykdl_utils.kdl_kinematics import KDLKinematics
 
 r = rospkg.RosPack()
-path = r.get_path('ur_teleop_controller')
+path = r.get_path('ur5e_compliant_controller')
 robot = URDF.from_xml_file(path+"/config/ur5e.urdf")
 dummy_arm = URDF.from_xml_file(path+"/config/dummy_arm.urdf")
 
@@ -74,6 +74,7 @@ class ur5e_arm():
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
     daq_ref_pos = deepcopy(default_pos)
+    current_command_pos = deepcopy(default_pos)
 
     lower_lims = (np.pi/180)*np.array([5.0, -120.0, 5.0, -150.0, -175.0, 95.0])
     upper_lims = (np.pi/180)*np.array([175.0, 5.0, 175.0, 5.0, 5.0, 265.0])
@@ -96,10 +97,10 @@ class ur5e_arm():
     current_joint_positions = np.zeros(6)
     current_joint_velocities = np.zeros(6)
 
-    current_daq_positions = np.zeros(6)
-    current_daq_velocities = np.zeros(6)
+    current_cmd_positions = np.zeros(6)
+    current_cmd_velocities = np.zeros(6)
     #DEBUG
-    current_daq_rel_positions = np.zeros(6) #current_daq_positions - control_arm_ref_config
+    current_daq_rel_positions = np.zeros(6) #current_cmd_positions - control_arm_ref_config
     current_daq_rel_positions_waraped = np.zeros(6)
 
     first_daq_callback = True
@@ -162,7 +163,7 @@ class ur5e_arm():
             print('Running in test mode ... no daq input')
             self.test_control_signal = test_control_signal
         else:
-            rospy.Subscriber("daqdata_filtered", jointdata, self.daq_callback)
+            rospy.Subscriber("command_pos", jointdata, self.command_callback)
 
         #start robot state subscriber (detects fault or estop press)
         rospy.Subscriber('/ur_hardware_interface/safety_mode',SafetyMode, self.safety_callback)
@@ -248,23 +249,9 @@ class ur5e_arm():
         np.matmul(Ja.transpose(), self.current_wrench_global, out = self.current_joint_torque)
         self.first_wrench_callback = False
 
-    def daq_callback(self, data):
-        previous_positions = deepcopy(self.current_daq_positions)
-        self.current_daq_positions[:] = [data.encoder1.pos, data.encoder2.pos, data.encoder3.pos, data.encoder4.pos, data.encoder5.pos, data.encoder6.pos]
-        self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
-        self.current_daq_velocities *= joint_inversion #account for diferent conventions
-
-        #if not self.first_daq_callback and np.any(np.abs(self.current_daq_positions - previous_positions) > self.position_jump_error):
-        #    print('stopping arm - encoder error!')
-        #    print('Daq position change is too high')
-        #    print('Previous Positions:\n{}'.format(previous_positions))
-        #    print('New Positions:\n{}'.format(self.current_daq_positions))
-        #    self.shutdown_safe()
-        ## np.subtract(,,out=) #update relative position
-        #self.current_daq_rel_positions = self.current_daq_positions - self.control_arm_ref_config
-        #self.current_daq_rel_positions *= joint_inversion
-        #self.current_daq_rel_positions_waraped = np.mod(self.current_daq_rel_positions+np.pi,two_pi)-np.pi
-        #self.first_daq_callback = False
+    def command_callback(self, data):
+        self.current_cmd_positions[:] = [data.encoder1.pos, data.encoder2.pos, data.encoder3.pos, data.encoder4.pos, data.encoder5.pos, data.encoder6.pos]
+        self.current_cmd_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
 
     # def wrap_relative_angles(self):
     ## TODO Expand this to be a better exception handler 
@@ -334,7 +321,7 @@ class ur5e_arm():
         TODO: Write configuration to storage for future use'''
         if interactive:
             _ = raw_input("Hit enter when ready to save the control arm ref pos.")
-        self.control_arm_def_config = np.mod(deepcopy(self.current_daq_positions),np.pi*2)
+        self.control_arm_def_config = np.mod(deepcopy(self.current_cmd_positions),np.pi*2)
         self.control_arm_ref_config = deepcopy(self.control_arm_def_config)
         print("Control Arm Default Position Setpoint:\n{}\n".format(self.control_arm_def_config))
 
@@ -346,7 +333,7 @@ class ur5e_arm():
         '''
         if interactive:
             _ = raw_input("Hit enter when ready to set the control arm ref pos.")
-        self.control_arm_ref_config = np.mod(deepcopy(self.current_daq_positions),np.pi*2)
+        self.control_arm_ref_config = np.mod(deepcopy(self.current_cmd_positions),np.pi*2)
         if reset_robot_ref_config_to_current:
             self.robot_ref_pos = deepcopy(self.current_joint_positions)
         print("Control Arm Ref Position Setpoint:\n{}\n".format(self.control_arm_def_config))
@@ -362,7 +349,7 @@ class ur5e_arm():
             if interactive:
                 _ = raw_input("Hit enter when ready to capture the control arm ref pos. Try {}/{}".format(i+1,tries))
             #get current config
-            control_arm_config = deepcopy(self.current_daq_positions)
+            control_arm_config = deepcopy(self.current_cmd_positions)
             # print('Current DAQ Position:')
             # print(control_arm_config)
             #check if there is a significant error
@@ -476,7 +463,7 @@ class ur5e_arm():
         rate = rospy.Rate(sample_rate)
         self.init_joint_admittance_controller()
         while not rospy.is_shutdown():
-            current_homing_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
+            current_homing_pos = self.current_cmd_positions * joint_inversion + self.daq_ref_pos
             if not self.identify_joint_lim(current_homing_pos):
                 print('Homing desired position outside robot position limit. Please change dummy position')
                 result = False
@@ -559,12 +546,12 @@ class ur5e_arm():
 
     ## TODO Break down this into separate modular functions
     def move(self, dialoge_enabled = True):
-        '''Main control loop for teleoperation use.'''
+        ''' Main control loop '''
         rate = rospy.Rate(sample_rate)
-        self.init_joint_admittance_controller(capture_start_as_ref_pos, dialoge_enabled)
+        self.init_joint_admittance_controller(dialoge_enabled)
 
         while not self.shutdown and self.safety_mode == 1 and self.enabled: #shutdown is set on ctrl-c.
-            self.joint_admittance_controller(ref_pos = self.robot_ref_pos, # + 
+            self.joint_admittance_controller(ref_pos = self.current_command_pos,
                                              max_speeds = self.max_joint_speeds,
                                              max_acc = self.max_joint_acc)
 
@@ -605,7 +592,7 @@ class ur5e_arm():
         joint_torque_after_correction = self.current_joint_torque - self.joint_torque_error
 
         acc = (joint_torque_after_correction + self.joint_stiffness * joint_pos_error
-                + 0.5 * 2 * self.zeta * np.sqrt(self.joint_stiffness * self.joint_inertia) * (self.current_daq_velocities - self.current_joint_velocities)
+                + 0.5 * 2 * self.zeta * np.sqrt(self.joint_stiffness * self.joint_inertia) * (self.current_cmd_velocities - self.current_joint_velocities)
                 - 0.5 * 2 * self.zeta * np.sqrt(self.joint_stiffness * self.joint_inertia) * self.current_joint_velocities) / self.joint_inertia
         np.clip(acc, -max_acc, max_acc, acc)
         self.vel_admittance += acc / sample_rate
@@ -641,7 +628,7 @@ class ur5e_arm():
             if not self.enabled:
                 time.sleep(0.01)
                 continue
-            # current_homing_pos = deepcopy(self.current_daq_positions * joint_inversion + self.daq_ref_pos)
+            # current_homing_pos = deepcopy(self.current_cmd_positions * joint_inversion + self.daq_ref_pos)
             # if not self.identify_joint_lim(current_homing_pos):
             #     print('Homing desired position outside robot position limit. Please change dummy position')
             #     continue
