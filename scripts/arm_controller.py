@@ -56,7 +56,7 @@ class ur5e_arm():
     '''
     safety_mode = -1
     shutdown = False
-    enabled = False
+    enabled = True 
     jogging = False
     joint_reorder = [2,1,0,3,4,5]
     breaking_stop_time = 0.1 #when stoping safely, executes the stop in 0.1s Do not make large!
@@ -70,7 +70,7 @@ class ur5e_arm():
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-    default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -45.0, 180.0])
+    default_pos = (np.pi/180)*np.array([90.0, -120.0, 90.0, -70.0, -90.0, 180.0])
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
     daq_ref_pos = deepcopy(default_pos)
@@ -153,7 +153,7 @@ class ur5e_arm():
 
         #keepout (limmited to z axis height for now)
         self.keepout_enabled = True
-        self.z_axis_lim = -0.37 # floor 0.095 #short table # #0.0 #table
+        self.z_axis_lim = 0.0 # floor 0.095 #short table # #0.0 #table
 
         #launch nodes
         rospy.init_node('teleop_controller', anonymous=True)
@@ -177,7 +177,7 @@ class ur5e_arm():
         rospy.wait_for_service('/ur_hardware_interface/dashboard/get_safety_mode')
         self.safety_mode_proxy = rospy.ServiceProxy('/ur_hardware_interface/dashboard/get_safety_mode', GetSafetyMode)
         #start subscriber for deadman enable
-        rospy.Subscriber('/enable_move',Bool,self.enable_callback)
+        #rospy.Subscriber('/enable_move',Bool,self.enable_callback)
         #start subscriber for jogging enable
         rospy.Subscriber('/jogging',Bool,self.jogging_callback)
 
@@ -254,17 +254,17 @@ class ur5e_arm():
         self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
         self.current_daq_velocities *= joint_inversion #account for diferent conventions
 
-        if not self.first_daq_callback and np.any(np.abs(self.current_daq_positions - previous_positions) > self.position_jump_error):
-            print('stopping arm - encoder error!')
-            print('Daq position change is too high')
-            print('Previous Positions:\n{}'.format(previous_positions))
-            print('New Positions:\n{}'.format(self.current_daq_positions))
-            self.shutdown_safe()
-        # np.subtract(,,out=) #update relative position
-        self.current_daq_rel_positions = self.current_daq_positions - self.control_arm_ref_config
-        self.current_daq_rel_positions *= joint_inversion
-        self.current_daq_rel_positions_waraped = np.mod(self.current_daq_rel_positions+np.pi,two_pi)-np.pi
-        self.first_daq_callback = False
+        #if not self.first_daq_callback and np.any(np.abs(self.current_daq_positions - previous_positions) > self.position_jump_error):
+        #    print('stopping arm - encoder error!')
+        #    print('Daq position change is too high')
+        #    print('Previous Positions:\n{}'.format(previous_positions))
+        #    print('New Positions:\n{}'.format(self.current_daq_positions))
+        #    self.shutdown_safe()
+        ## np.subtract(,,out=) #update relative position
+        #self.current_daq_rel_positions = self.current_daq_positions - self.control_arm_ref_config
+        #self.current_daq_rel_positions *= joint_inversion
+        #self.current_daq_rel_positions_waraped = np.mod(self.current_daq_rel_positions+np.pi,two_pi)-np.pi
+        #self.first_daq_callback = False
 
     # def wrap_relative_angles(self):
     ## TODO Expand this to be a better exception handler 
@@ -558,18 +558,13 @@ class ur5e_arm():
         return reference_positon
 
     ## TODO Break down this into separate modular functions
-    def move(self,
-             capture_start_as_ref_pos = False,
-             dialoge_enabled = True):
+    def move(self, dialoge_enabled = True):
         '''Main control loop for teleoperation use.'''
-        if not self.ready_to_move():
-            self.user_prompt_ready_to_move()
-
         rate = rospy.Rate(sample_rate)
         self.init_joint_admittance_controller(capture_start_as_ref_pos, dialoge_enabled)
 
         while not self.shutdown and self.safety_mode == 1 and self.enabled: #shutdown is set on ctrl-c.
-            self.joint_admittance_controller(ref_pos = self.current_daq_rel_positions_waraped + self.robot_ref_pos,
+            self.joint_admittance_controller(ref_pos = self.robot_ref_pos, # + 
                                              max_speeds = self.max_joint_speeds,
                                              max_acc = self.max_joint_acc)
 
@@ -637,9 +632,6 @@ class ur5e_arm():
         '''Run runs the move routine repeatedly, accounting for the
         enable/disable switch'''
 
-        print('Put the control arm in start configuration.')
-        print('Depress and hold the deadman switch when ready to move.')
-
         while not rospy.is_shutdown():
             #check safety
             if not self.safety_mode == 1:
@@ -654,17 +646,9 @@ class ur5e_arm():
             #     print('Homing desired position outside robot position limit. Please change dummy position')
             #     continue
             
-            self.is_homing = True
-            self.is_homing_pub.publish(self.is_homing)
-            # reached_home = self.move_to(current_homing_pos,speed = 0.2,override_initial_joint_lims=True,require_enable = True)
-            reached_home = self.move_to()
-            self.is_homing = False
-            self.is_homing_pub.publish(self.is_homing)
-            if reached_home:
-                #start moving
-                print('Starting Free Movement')
-                self.move(capture_start_as_ref_pos = True,
-                          dialoge_enabled = False)
+            #start moving
+            print('Starting Free Movement')
+            self.move(dialoge_enabled = False)
 
 
 
@@ -676,16 +660,7 @@ if __name__ == "__main__":
     time.sleep(1)
     arm.stop_arm()
 
-    # print(arm.move_to_robost(arm.default_pos,
-    #                          speed = 0.1,
-    #                          override_initial_joint_lims=True,
-    #                          require_enable = True))
     arm.homing()
-
-    pose = forward(arm.current_joint_positions)
-    print(pose)
-    raw_input("Hit enter when ready to move")
-
     arm.run()
 
     arm.stop_arm()
