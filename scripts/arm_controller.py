@@ -18,6 +18,8 @@ from ur5teleop.msg import jointdata, Joint
 from ur_dashboard_msgs.msg import SafetyMode
 from ur_dashboard_msgs.srv import IsProgramRunning, GetSafetyMode
 from std_msgs.msg import Bool
+from moveit_msgs.srv import GetPositionIK, GetPositionIKRequest, GetPositionIKResponse
+from moveit_msgs.srv import GetPositionFK, GetPositionFKRequest, GetPositionFKResponse
 
 # Import the module
 from urdf_parser_py.urdf import URDF
@@ -83,10 +85,11 @@ class ur5e_arm():
     #define fields that are updated by the subscriber callbacks
     current_joint_positions = np.zeros(6)
     current_joint_velocities = np.zeros(6)
+    current_ee_pose = None
 
     current_cmd_joint_positions = np.zeros(6)
     current_cmd_joint_velocities = np.zeros(6)
-    current_cmd_pose = None
+    current_cmd_ee_pose = None
 
     #DEBUG
     current_daq_rel_positions = np.zeros(6)
@@ -134,7 +137,7 @@ class ur5e_arm():
     kdl_kin_op = KDLKinematics(dummy_arm, "base_link", "wrist_3_link")
 
 
-    def __init__(self, joint_control=True, test_control_signal = False, conservative_joint_lims = True):
+    def __init__(self, ee_link, joint_control=True, test_control_signal = False, conservative_joint_lims = True):
         '''set up controller class variables & parameters'''
 
         if conservative_joint_lims:
@@ -170,6 +173,15 @@ class ur5e_arm():
         #rospy.Subscriber('/enable_move',Bool,self.enable_callback)
         #start subscriber for jogging enable
         rospy.Subscriber('/jogging',Bool,self.jogging_callback)
+
+        # MoveIt
+        self.ik_srv = rospy.ServiceProxy('/compute_ik', GetPositionIK)
+        self.ik_timeout = 1.0
+        self.ik_attempts = 0
+        self.avoid_collisions = False
+
+        self.fk_srv = rospy.ServiceProxy('/compute_fk', GetPositionFK)
+        self.ee_link = ee_link
 
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
@@ -243,9 +255,8 @@ class ur5e_arm():
         self.current_cmd_joint_velocities[:] = data.velocity
 
     def pose_command_callback(self, data):
-        self.current_cmd_pose = data
+        self.current_cmd_ee_pose = data
 
-    ## TODO Expand this to be a better exception handler
     def safety_callback(self, data):
         '''Detect when safety stop is triggered'''
         self.safety_mode = data.mode
@@ -259,18 +270,15 @@ class ur5e_arm():
             #wait for user to fix the stop
             # self.user_wait_safety_stop()
 
-    ## TODO Change function name, deadman_callback(self, data)
     def enable_callback(self, data):
         '''Detects the software enable/disable safety switch'''
         self.enabled = data.data
 
-    ## TODO Merge this into exception handler
     def user_wait_safety_stop(self):
         #wait for user to fix the stop
         while not self.safety_mode == 1:
             raw_input('Safety Stop or other stop condition enabled.\n Correct the fault, then hit enter to continue')
 
-    ## TODO Merge this into exception handler
     def ensure_safety_mode(self):
         '''Blocks until the safety mode is 1 (normal)'''
         while not self.safety_mode == 1:
@@ -280,12 +288,10 @@ class ur5e_arm():
         '''Calls get safet mode service, does not return self.safety_mode, which is updated by the safety mode topic, but should be the same.'''
         return self.safety_mode_proxy().safety_mode.mode
 
-    ## TODO Safety handling
     def ready_to_move(self):
         '''returns true if the safety mode is 1 (normal) and the remote program is running'''
         return self.get_safety_mode() == 1 and self.remote_control_running()
 
-    ## TODO Safety handling
     def user_prompt_ready_to_move(self):
         '''Blocking dialog to get the user to reset the safety warnings and start the remote program'''
         while True:
@@ -314,7 +320,6 @@ class ur5e_arm():
             self.robot_ref_pos = deepcopy(self.current_joint_positions)
         print("Control Arm Ref Position Setpoint:\n{}\n".format(self.control_arm_def_config))
 
-    ## TODO Vanity check function
     def is_joint_position(self, position):
         '''Verifies that this is a 1dim numpy array with len 6'''
         if isinstance(position, np.ndarray):
@@ -356,7 +361,6 @@ class ur5e_arm():
         while np.any(np.abs(self.current_joint_velocities)>0.0001):
             self.vel_pub.publish(Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
 
-    ## TODO Vanity check function
     def in_joint_lims(self, position):
         '''expects an array of joint positions'''
         return np.all(self.lower_lims < position) and np.all(self.upper_lims > position)
@@ -382,17 +386,6 @@ class ur5e_arm():
         rate = rospy.Rate(sample_rate)
         self.init_joint_admittance_controller()
         while not rospy.is_shutdown():
-            #check safety
-            if not self.ready_to_move():
-                self.user_prompt_ready_to_move()
-                continue
-            #check enabled
-            if not self.enabled:
-                self.stop_arm(safe = True)
-                self.vel_ref.data = np.array([0.0]*6)
-                time.sleep(0.01)
-                continue
-
             self.joint_admittance_controller(ref_pos = self.default_pos,
                                              max_speeds = self.homing_joint_speeds,
                                              max_acc = self.homing_joint_acc)
@@ -400,7 +393,12 @@ class ur5e_arm():
             if not np.any(np.abs(self.default_pos - self.current_joint_positions)>0.01):
                 print("Home position reached")
                 break
-            self.current_cmd_joint_positions = self.default_pos
+
+            # Set current commanded positions to the current positions
+            if self.joint_control:
+              self.current_cmd_joint_positions = self.current_joint_positions
+            else:
+              self.current_cmd_ee_pose = self.forward_kinematics(self.current_joint_positions)
 
             #wait
             rate.sleep()
@@ -408,7 +406,6 @@ class ur5e_arm():
         self.stop_arm(safe = True)
         self.vel_ref.data = np.array([0.0]*6)
 
-    ## TODO Refinement required
     def return_collison_free_config(self, reference_positon):
         '''takes the proposed set of joint positions for the real robot and
         checks the forward kinematics for collisions with the floor plane and the
@@ -430,7 +427,6 @@ class ur5e_arm():
             reference_positon = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
         return reference_positon
 
-    ## TODO Break down this into separate modular functions
     def move(self, dialoge_enabled = True):
         ''' Main control loop '''
         rate = rospy.Rate(sample_rate)
@@ -442,20 +438,56 @@ class ur5e_arm():
                                                max_speeds = self.max_joint_speeds,
                                                max_acc = self.max_joint_acc)
             else:
-              # TODO: Add safty check to ensure the difference is not that large here
-              cmd_joint_positions = self.inverse_kinematics(self.current_cmd_pose)
+              if not self.checkPoseDistance(self.current_cmd_ee_pose, self.current_ee_pose):
+                rospy.logerr('Requested movement is too large.')
+                continue
+              cmd_joint_positions = self.inverse_kinematics(self.current_cmd_ee_pose)
               self.joint_admittance_controller(ref_pos = cmd_joint_positions,
                                                max_speeds = self.max_joint_speeds,
                                                max_acc = self.max_joint_acc)
-
+              self.current_ee_pose = self.forward_kinematics(self.current_joint_positions)
 
             #wait
             rate.sleep()
         self.stop_arm(safe = True)
         self.vel_ref.data = np.array([0.0]*6)
 
+    def checkPoseDistance(self, pose_1, pose_2):
+        return True
+
+    # Get IK using MoveIt
     def inverse_kinematics(self, pose):
-      return None
+        req = GetPositionIKRequest()
+        req.ik_request.group_name = self.group_name
+        req.ik_request.pose_stamped = pose
+        req.ik_request.timeout = rospy.Duration(self.ik_timeout)
+        req.ik_request.attempts = self.ik_attempts
+        req.ik_requst.avoid_collisions = self.avoid_collisions
+
+        try:
+            resp = self.ik_srv.call(req)
+            return resp
+        except rospy.ServiceException as e:
+            rospy.logerr('Service exception: ' + str(e))
+            resp = GetPositionIKResponse()
+            resp.error_code = 99999
+            return resp
+
+    # Get FK using MoveIt
+    def forward_kinematics(self, joint_state):
+        req = GetPositionFKRequst()
+        req.header.frame_id = 'base_link'
+        req.fk_link_names = [self.ee_link]
+        req.robot_state.joint_state = joint_state
+
+        try:
+            resp = self.fk_srv.call(req)
+            return resp
+        except rospy.ServiceException as e:
+            rospy.logerr('Service exception: ' + str(e))
+            resp = GetPositionFKResponse()
+            resp.error_code = 99999
+            return resp
 
     # online torque error id
     def force_torque_error_estimation(self, position_error, force_error, force):
@@ -465,16 +497,13 @@ class ur5e_arm():
         return force_error
 
     # joint admittance controller initialization
-    def init_joint_admittance_controller(self, dialoge_enabled = True):
+    def init_joint_admittance_controller(self, dialoge_enabled=True):
 
         self.joint_torque_error = deepcopy(self.current_joint_torque)
         self.vel_admittance = np.zeros(6)
 
     # joint admittance controller
-    def joint_admittance_controller(self,
-                                    ref_pos,
-                                    max_speeds,
-                                    max_acc):
+    def joint_admittance_controller(self, ref_pos, max_speeds, max_acc):
         np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
         joint_pos_error = np.subtract(ref_pos, self.current_joint_positions)
         vel_ref_array = np.multiply(joint_pos_error, self.joint_p_gains_varaible)
@@ -500,7 +529,6 @@ class ur5e_arm():
         self.vel_ref.data = vel_ref_array
         self.vel_pub.publish(self.vel_ref)
 
-    ## TODO Main loop, add saftey handling here
     def run(self):
         ''' Run runs the move routine repeatedly '''
 
@@ -511,9 +539,11 @@ class ur5e_arm():
 
 if __name__ == "__main__":
     #This script is included for testing purposes
-    print("starting")
+    print("Starting compliant arm controller")
 
-    arm = ur5e_arm(joint_control=True)
+    # TODO: Add end effector link name here
+    ee_link = 'wrist_3_link'
+    arm = ur5e_arm(ee_link, joint_control=True)
     time.sleep(1)
     arm.stop_arm()
 
