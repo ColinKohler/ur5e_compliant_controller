@@ -137,7 +137,7 @@ class ur5e_arm():
     kdl_kin_op = KDLKinematics(dummy_arm, "base_link", "wrist_3_link")
 
 
-    def __init__(self, ee_link, joint_control=True, test_control_signal = False, conservative_joint_lims = True):
+    def __init__(self, moveit_group, ee_link, joint_control=True, test_control_signal = False, conservative_joint_lims = True):
         '''set up controller class variables & parameters'''
 
         if conservative_joint_lims:
@@ -147,12 +147,13 @@ class ur5e_arm():
         #keepout (limmited to z axis height for now)
         self.keepout_enabled = True
         self.z_axis_lim = 0.0 # floor 0.095 #short table # #0.0 #table
+        self.max_pos_delta = 0.05
         self.joint_control = joint_control
         if not self.joint_control:
           self.current_cmd_joint_velocities = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.2])
 
         #launch nodes
-        rospy.init_node('teleop_controller', anonymous=True)
+        rospy.init_node('compliant_controller', anonymous=True)
         #start subscribers
         rospy.Subscriber("joint_command", JointState, self.joint_command_callback)
         rospy.Subscriber("pose_command", PoseStamped, self.pose_command_callback)
@@ -175,18 +176,23 @@ class ur5e_arm():
         rospy.Subscriber('/jogging',Bool,self.jogging_callback)
 
         # MoveIt
+        self.group_name = moveit_group
+        self.ee_link = ee_link
+
         self.ik_srv = rospy.ServiceProxy('/compute_ik', GetPositionIK)
         self.ik_timeout = 1.0
         self.ik_attempts = 0
         self.avoid_collisions = False
 
         self.fk_srv = rospy.ServiceProxy('/compute_fk', GetPositionFK)
-        self.ee_link = ee_link
 
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
                             Float64MultiArray,
                             queue_size=1)
+
+        # start position publisher
+        self.ee_pose_pub = rospy.Publisher("/ee_pose", PoseStamped, queue_size=1)
 
         #vertical direction force measurement publisher
         self.load_mass_pub = rospy.Publisher("/load_mass",
@@ -446,6 +452,7 @@ class ur5e_arm():
                                                max_speeds = self.max_joint_speeds,
                                                max_acc = self.max_joint_acc)
               self.current_ee_pose = self.forward_kinematics(self.current_joint_positions)
+              self.ee_pose_pub.publish(self.current_ee_pose)
 
             #wait
             rate.sleep()
@@ -453,7 +460,10 @@ class ur5e_arm():
         self.vel_ref.data = np.array([0.0]*6)
 
     def checkPoseDistance(self, pose_1, pose_2):
-        return True
+      pos_1 = pose_1.pose.position
+      pos_2 = pose_2.pose.position
+
+      return (np.linalg.norm(pos_1, pos_2) < self.max_pos_delta)
 
     # Get IK using MoveIt
     def inverse_kinematics(self, pose):
@@ -482,7 +492,7 @@ class ur5e_arm():
 
         try:
             resp = self.fk_srv.call(req)
-            return resp
+            return resp.pose_stamped
         except rospy.ServiceException as e:
             rospy.logerr('Service exception: ' + str(e))
             resp = GetPositionFKResponse()
@@ -541,9 +551,9 @@ if __name__ == "__main__":
     #This script is included for testing purposes
     print("Starting compliant arm controller")
 
-    # TODO: Add end effector link name here
     ee_link = 'wrist_3_link'
-    arm = ur5e_arm(ee_link, joint_control=True)
+    moveit_group = 'manipulator'
+    arm = ur5e_arm(moveit_group, ee_link, joint_control=True)
     time.sleep(1)
     arm.stop_arm()
 
