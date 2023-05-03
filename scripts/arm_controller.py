@@ -18,8 +18,6 @@ from ur5teleop.msg import jointdata, Joint
 from ur_dashboard_msgs.msg import SafetyMode
 from ur_dashboard_msgs.srv import IsProgramRunning, GetSafetyMode
 from std_msgs.msg import Bool
-from moveit_msgs.srv import GetPositionIK, GetPositionIKRequest, GetPositionIKResponse
-from moveit_msgs.srv import GetPositionFK, GetPositionFKRequest, GetPositionFKResponse
 
 # Import the module
 from urdf_parser_py.urdf import URDF
@@ -46,9 +44,10 @@ class ur5e_arm():
     '''
     safety_mode = -1
     shutdown = False
-    enabled = True
     jogging = False
+    enabled = True
     joint_reorder = [2,1,0,3,4,5]
+    #joint_reorder = [0,1,2,3,4,5]
     breaking_stop_time = 0.1 #when stoping safely, executes the stop in 0.1s Do not make large!
 
     #throws an error and stops the arm if there is a position discontinuity in the
@@ -85,11 +84,9 @@ class ur5e_arm():
     #define fields that are updated by the subscriber callbacks
     current_joint_positions = np.zeros(6)
     current_joint_velocities = np.zeros(6)
-    current_ee_pose = None
 
     current_cmd_joint_positions = np.zeros(6)
     current_cmd_joint_velocities = np.zeros(6)
-    current_cmd_ee_pose = None
 
     #DEBUG
     current_daq_rel_positions = np.zeros(6)
@@ -137,7 +134,7 @@ class ur5e_arm():
     kdl_kin_op = KDLKinematics(dummy_arm, "base_link", "wrist_3_link")
 
 
-    def __init__(self, moveit_group, ee_link, joint_control=True, test_control_signal = False, conservative_joint_lims = True):
+    def __init__(self, test_control_signal = False, conservative_joint_lims = True):
         '''set up controller class variables & parameters'''
 
         if conservative_joint_lims:
@@ -147,16 +144,11 @@ class ur5e_arm():
         #keepout (limmited to z axis height for now)
         self.keepout_enabled = True
         self.z_axis_lim = 0.0 # floor 0.095 #short table # #0.0 #table
-        self.max_pos_delta = 0.05
-        self.joint_control = joint_control
-        if not self.joint_control:
-          self.current_cmd_joint_velocities = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.2])
 
         #launch nodes
         rospy.init_node('compliant_controller', anonymous=True)
         #start subscribers
         rospy.Subscriber("joint_command", JointState, self.joint_command_callback)
-        rospy.Subscriber("pose_command", PoseStamped, self.pose_command_callback)
 
         #start robot state subscriber (detects fault or estop press)
         rospy.Subscriber('/ur_hardware_interface/safety_mode',SafetyMode, self.safety_callback)
@@ -173,26 +165,11 @@ class ur5e_arm():
         #start subscriber for deadman enable
         #rospy.Subscriber('/enable_move',Bool,self.enable_callback)
         #start subscriber for jogging enable
-        rospy.Subscriber('/jogging',Bool,self.jogging_callback)
-
-        # MoveIt
-        self.group_name = moveit_group
-        self.ee_link = ee_link
-
-        self.ik_srv = rospy.ServiceProxy('/compute_ik', GetPositionIK)
-        self.ik_timeout = 1.0
-        self.ik_attempts = 0
-        self.avoid_collisions = False
-
-        self.fk_srv = rospy.ServiceProxy('/compute_fk', GetPositionFK)
 
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
                             Float64MultiArray,
                             queue_size=1)
-
-        # start position publisher
-        self.ee_pose_pub = rospy.Publisher("/ee_pose", PoseStamped, queue_size=1)
 
         #vertical direction force measurement publisher
         self.load_mass_pub = rospy.Publisher("/load_mass",
@@ -238,6 +215,7 @@ class ur5e_arm():
             print('Ready to move')
 
     def joint_state_callback(self, data):
+        self.current_joint_state = deepcopy(data)
         self.current_joint_positions[self.joint_reorder] = data.position
         self.current_joint_velocities[self.joint_reorder] = data.velocity
 
@@ -257,11 +235,10 @@ class ur5e_arm():
         self.first_wrench_callback = False
 
     def joint_command_callback(self, data):
+        print('joint callback')
         self.current_cmd_joint_positions[:] = data.position
+        self.current_cmd_joint_positions = np.mod(self.current_cmd_joint_positions+np.pi,two_pi)-np.pi
         self.current_cmd_joint_velocities[:] = data.velocity
-
-    def pose_command_callback(self, data):
-        self.current_cmd_ee_pose = data
 
     def safety_callback(self, data):
         '''Detect when safety stop is triggered'''
@@ -387,7 +364,7 @@ class ur5e_arm():
 
     # homing() function: initialzing UR to default position
     def homing(self):
-      print('Moving to home position...')
+        print('Moving to home position...')
 
         rate = rospy.Rate(sample_rate)
         self.init_joint_admittance_controller()
@@ -396,18 +373,16 @@ class ur5e_arm():
                                              max_speeds = self.homing_joint_speeds,
                                              max_acc = self.homing_joint_acc)
 
-            if not np.any(np.abs(self.default_pos - self.current_joint_positions)>0.01):
+            if not np.any(np.abs(self.default_pos - self.current_joint_positions)>0.02):
                 print("Home position reached")
                 break
-
-            # Set current commanded positions to the current positions
-            if self.joint_control:
-              self.current_cmd_joint_positions = self.current_joint_positions
-            else:
-              self.current_cmd_ee_pose = self.forward_kinematics(self.current_joint_positions)
+            self.current_cmd_joint_positions = self.default_pos
 
             #wait
             rate.sleep()
+
+        # Set current commanded positions to the current positions
+        self.current_cmd_joint_positions = self.current_joint_positions
 
         self.stop_arm(safe = True)
         self.vel_ref.data = np.array([0.0]*6)
@@ -439,65 +414,14 @@ class ur5e_arm():
         self.init_joint_admittance_controller(dialoge_enabled)
 
         while not self.shutdown and self.safety_mode == 1 and self.enabled: #shutdown is set on ctrl-c.
-            if self.joint_control:
-              self.joint_admittance_controller(ref_pos = self.current_cmd_joint_positions,
-                                               max_speeds = self.max_joint_speeds,
-                                               max_acc = self.max_joint_acc)
-            else:
-              if not self.checkPoseDistance(self.current_cmd_ee_pose, self.current_ee_pose):
-                rospy.logerr('Requested movement is too large.')
-                continue
-              cmd_joint_positions = self.inverse_kinematics(self.current_cmd_ee_pose)
-              self.joint_admittance_controller(ref_pos = cmd_joint_positions,
-                                               max_speeds = self.max_joint_speeds,
-                                               max_acc = self.max_joint_acc)
-              self.current_ee_pose = self.forward_kinematics(self.current_joint_positions)
-              self.ee_pose_pub.publish(self.current_ee_pose)
+            self.joint_admittance_controller(ref_pos = self.current_cmd_joint_positions,
+                                             max_speeds = self.max_joint_speeds,
+                                             max_acc = self.max_joint_acc)
 
             #wait
             rate.sleep()
         self.stop_arm(safe = True)
         self.vel_ref.data = np.array([0.0]*6)
-
-    def checkPoseDistance(self, pose_1, pose_2):
-      pos_1 = pose_1.pose.position
-      pos_2 = pose_2.pose.position
-
-      return (np.linalg.norm(pos_1, pos_2) < self.max_pos_delta)
-
-    # Get IK using MoveIt
-    def inverse_kinematics(self, pose):
-        req = GetPositionIKRequest()
-        req.ik_request.group_name = self.group_name
-        req.ik_request.pose_stamped = pose
-        req.ik_request.timeout = rospy.Duration(self.ik_timeout)
-        req.ik_request.attempts = self.ik_attempts
-        req.ik_requst.avoid_collisions = self.avoid_collisions
-
-        try:
-            resp = self.ik_srv.call(req)
-            return resp
-        except rospy.ServiceException as e:
-            rospy.logerr('Service exception: ' + str(e))
-            resp = GetPositionIKResponse()
-            resp.error_code = 99999
-            return resp
-
-    # Get FK using MoveIt
-    def forward_kinematics(self, joint_state):
-        req = GetPositionFKRequst()
-        req.header.frame_id = 'base_link'
-        req.fk_link_names = [self.ee_link]
-        req.robot_state.joint_state = joint_state
-
-        try:
-            resp = self.fk_srv.call(req)
-            return resp.pose_stamped
-        except rospy.ServiceException as e:
-            rospy.logerr('Service exception: ' + str(e))
-            resp = GetPositionFKResponse()
-            resp.error_code = 99999
-            return resp
 
     # online torque error id
     def force_torque_error_estimation(self, position_error, force_error, force):
@@ -541,7 +465,6 @@ class ur5e_arm():
 
     def run(self):
         ''' Run runs the move routine repeatedly '''
-
         while not rospy.is_shutdown():
             #start moving
             print('Starting Movement')
@@ -551,9 +474,7 @@ if __name__ == "__main__":
     #This script is included for testing purposes
     print("Starting compliant arm controller")
 
-    ee_link = 'wrist_3_link'
-    moveit_group = 'manipulator'
-    arm = ur5e_arm(moveit_group, ee_link, joint_control=True)
+    arm = ur5e_arm()
     time.sleep(1)
     arm.stop_arm()
 
