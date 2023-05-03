@@ -47,7 +47,6 @@ class ur5e_arm():
     jogging = False
     enabled = True
     joint_reorder = [2,1,0,3,4,5]
-    #joint_reorder = [0,1,2,3,4,5]
     breaking_stop_time = 0.1 #when stoping safely, executes the stop in 0.1s Do not make large!
 
     #throws an error and stops the arm if there is a position discontinuity in the
@@ -59,7 +58,7 @@ class ur5e_arm():
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-    default_pos = (np.pi/180)*np.array([90.0, -120.0, 90.0, -70.0, -90.0, 180.0])
+    default_pos = (np.pi/180)*np.array([90.0, -120.0, 90.0, -77.0, -90.0, 180.0])
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
     daq_ref_pos = deepcopy(default_pos)
@@ -235,7 +234,6 @@ class ur5e_arm():
         self.first_wrench_callback = False
 
     def joint_command_callback(self, data):
-        print('joint callback')
         self.current_cmd_joint_positions[:] = data.position
         self.current_cmd_joint_positions = np.mod(self.current_cmd_joint_positions+np.pi,two_pi)-np.pi
         self.current_cmd_joint_velocities[:] = data.velocity
@@ -432,7 +430,6 @@ class ur5e_arm():
 
     # joint admittance controller initialization
     def init_joint_admittance_controller(self, dialoge_enabled=True):
-
         self.joint_torque_error = deepcopy(self.current_joint_torque)
         self.vel_admittance = np.zeros(6)
 
