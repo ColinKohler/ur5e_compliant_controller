@@ -14,7 +14,6 @@ from kinematics import analytical_ik, nearest_ik_solution
 from std_msgs.msg import Float64MultiArray, Header
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import WrenchStamped, PoseStamped
-from ur5teleop.msg import jointdata, Joint
 from ur_dashboard_msgs.msg import SafetyMode
 from ur_dashboard_msgs.srv import IsProgramRunning, GetSafetyMode
 from std_msgs.msg import Bool
@@ -234,7 +233,7 @@ class ur5e_arm():
 
     def joint_command_callback(self, data):
         self.current_cmd_joint_positions[:] = data.position
-        self.current_cmd_joint_positions = np.mod(self.current_cmd_joint_positions+np.pi,two_pi)-np.pi
+        #self.current_cmd_joint_positions = np.mod(self.current_cmd_joint_positions+np.pi,two_pi)-np.pi
         self.current_cmd_joint_velocities[:] = data.velocity
 
     def safety_callback(self, data):
@@ -373,13 +372,12 @@ class ur5e_arm():
             if not np.any(np.abs(self.default_pos - self.current_joint_positions)>0.02):
                 print("Home position reached")
                 break
-            self.current_cmd_joint_positions = self.default_pos
 
             #wait
             rate.sleep()
 
         # Set current commanded positions to the current positions
-        self.current_cmd_joint_positions = self.current_joint_positions
+        self.current_cmd_joint_positions = deepcopy(self.current_joint_positions)
 
         self.stop_arm(safe = True)
         self.vel_ref.data = np.array([0.0]*6)
