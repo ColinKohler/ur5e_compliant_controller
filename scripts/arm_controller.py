@@ -132,8 +132,7 @@ class ur5e_arm():
     chain_op = tree_op.getChain("base_link", "wrist_3_link")
     kdl_kin_op = KDLKinematics(dummy_arm, "base_link", "wrist_3_link")
 
-
-    def __init__(self, test_control_signal = False, conservative_joint_lims = True):
+    def __init__(self, test_control_signal = False, conservative_joint_lims = False):
         '''set up controller class variables & parameters'''
 
         if conservative_joint_lims:
