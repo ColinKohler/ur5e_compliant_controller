@@ -1,4 +1,5 @@
 #! /usr/bin/env python
+import sys
 import rospy
 import rospkg
 import numpy as np
@@ -8,6 +9,7 @@ import time
 import Queue
 from scipy.interpolate import InterpolatedUnivariateSpline
 from ros_numpy import numpify
+import moveit_commander
 
 from std_msgs.msg import Float64MultiArray, Header
 from sensor_msgs.msg import JointState
@@ -15,10 +17,6 @@ from geometry_msgs.msg import WrenchStamped, PoseStamped
 from moveit_msgs.msg import RobotState, Constraints, JointConstraint
 from moveit_msgs.srv import GetPositionIK, GetPositionIKRequest, GetPositionIKResponse
 from moveit_msgs.srv import GetPositionFK, GetPositionFKRequest, GetPositionFKResponse
-
-from urdf_parser_py.urdf import URDF
-from pykdl_utils.kdl_parser import kdl_tree_from_urdf_model
-from pykdl_utils.kdl_kinematics import KDLKinematics
 
 class ur5e_position_controller(object):
     def __init__(self, ee_link, moveit_group):
@@ -44,15 +42,13 @@ class ur5e_position_controller(object):
         self.group_name = moveit_group
         self.ee_link = ee_link
 
+        moveit_commander.roscpp_initialize(sys.argv)
+        self.move_group = moveit_commander.MoveGroupCommander(self.group_name)
+
         self.ik_srv = rospy.ServiceProxy('/compute_ik', GetPositionIK)
         self.ik_timeout = 10.0
         self.ik_attempts = 0
         self.avoid_collisions = False
-
-        r = rospkg.RosPack()
-        path = r.get_path('ur5e_compliant_controller')
-        robot = URDF.from_xml_file(path+"/config/ur5e.urdf")
-        self.kdl_kin = KDLKinematics(robot, "base_link", "ee_link")
 
     def joint_state_callback(self, data):
         self.joint_positions[self.joint_reorder] = data.position
@@ -108,8 +104,11 @@ class ur5e_position_controller(object):
                 command = self.commands.get()
 
             current_joint_pos = copy.copy(self.joint_positions)
-            target_joint_state = self.inverse_kinematics(command)
-            target_joint_pos = np.array(list(target_joint_state.position))
+            self.move_group.set_pose_target(pose)
+            success, traj, time, err = self.move_group.plan()
+            breakpoint()
+            #target_joint_state = self.inverse_kinematics(command)
+            #target_joint_pos = np.array(list(target_joint_state.position))
 
             print(current_joint_pos)
             print(target_joint_pos)
