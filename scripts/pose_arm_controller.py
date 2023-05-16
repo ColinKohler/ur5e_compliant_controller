@@ -1,4 +1,5 @@
-#! /usr/bin/env python
+#!/usr/bin/env python3
+
 import sys
 import rospy
 import rospkg
@@ -6,17 +7,13 @@ import numpy as np
 from copy import deepcopy
 import copy
 import time
-import Queue
+from queue import Queue
 from scipy.interpolate import InterpolatedUnivariateSpline
-from ros_numpy import numpify
 import moveit_commander
 
 from std_msgs.msg import Float64MultiArray, Header
 from sensor_msgs.msg import JointState
-from geometry_msgs.msg import WrenchStamped, PoseStamped
-from moveit_msgs.msg import RobotState, Constraints, JointConstraint
-from moveit_msgs.srv import GetPositionIK, GetPositionIKRequest, GetPositionIKResponse
-from moveit_msgs.srv import GetPositionFK, GetPositionFKRequest, GetPositionFKResponse
+from geometry_msgs.msg import PoseStamped
 
 class ur5e_position_controller(object):
     def __init__(self, ee_link, moveit_group):
@@ -32,7 +29,7 @@ class ur5e_position_controller(object):
         self.joint_positions = np.zeros(6)
         self.joint_reorder = [2,1,0,3,4,5]
         self.prev_joint_command = None
-        self.commands = Queue.Queue()
+        self.commands = Queue()
 
         self.lower_lims = (np.pi/180)*np.array([5.0, -120.0, 5.0, -150.0, -175.0, 95.0])
         self.upper_lims = (np.pi/180)*np.array([175.0, 5.0, 175.0, 5.0, 5.0, 265.0])
@@ -41,14 +38,8 @@ class ur5e_position_controller(object):
         # MoveIt
         self.group_name = moveit_group
         self.ee_link = ee_link
-
         moveit_commander.roscpp_initialize(sys.argv)
         self.move_group = moveit_commander.MoveGroupCommander(self.group_name)
-
-        self.ik_srv = rospy.ServiceProxy('/compute_ik', GetPositionIK)
-        self.ik_timeout = 10.0
-        self.ik_attempts = 0
-        self.avoid_collisions = False
 
     def joint_state_callback(self, data):
         self.joint_positions[self.joint_reorder] = data.position
@@ -56,36 +47,6 @@ class ur5e_position_controller(object):
 
     def pose_command_callback(self, data):
         self.commands.put(data)
-
-    # Get IK using MoveIt
-    def inverse_kinematics(self, pose):
-        joint_constraints = list()
-        for i in range(6):
-            joint_constraints.append(JointConstraint(
-                joint_name=self.joint_state.name[i],
-                position=self.joint_state.position[i],
-                tolerance_above=self.max_joint_disp,
-                tolerance_below=self.max_joint_disp,
-                weight=1.0
-            ))
-
-        req = GetPositionIKRequest()
-        req.ik_request.group_name = self.group_name
-        req.ik_request.pose_stamped = pose
-        req.ik_request.timeout = rospy.Duration(self.ik_timeout)
-        req.ik_request.attempts = self.ik_attempts
-        req.ik_request.avoid_collisions = self.avoid_collisions
-        req.ik_request.robot_state = RobotState(joint_state=self.joint_state)
-        req.ik_request.constraints = Constraints(joint_constraints=joint_constraints)
-
-        try:
-            resp = self.ik_srv.call(req)
-            return resp.solution.joint_state
-        except rospy.ServiceException as e:
-            rospy.logerr('Service exception: ' + str(e))
-            resp = GetPositionIKResponse()
-            resp.error_code = 99999
-            return resp
 
     def run(self):
         print('Waiting for joint state...')
@@ -104,11 +65,10 @@ class ur5e_position_controller(object):
                 command = self.commands.get()
 
             current_joint_pos = copy.copy(self.joint_positions)
-            self.move_group.set_pose_target(pose)
-            success, traj, time, err = self.move_group.plan()
-            breakpoint()
-            #target_joint_state = self.inverse_kinematics(command)
-            #target_joint_pos = np.array(list(target_joint_state.position))
+            self.move_group.set_pose_target(command)
+            success, traj, planning_time, err = self.move_group.plan()
+            self.move_group.clear_pose_targets()
+            target_joint_pos = np.array(list(traj.joint_trajectory.points[-1].positions))
 
             print(current_joint_pos)
             print(target_joint_pos)
@@ -116,7 +76,6 @@ class ur5e_position_controller(object):
             speed = 0.25
             max_disp = np.max(np.abs(target_joint_pos-current_joint_pos))
             end_time = max_disp / speed
-            print(end_time)
 
             if max_disp > self.max_joint_disp:
                 rospy.logerr('Requested movement is too large.')

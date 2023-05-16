@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import rospy
 import time
 import copy
@@ -27,7 +29,7 @@ def main(keyboard_control):
 
   if keyboard_control:
     while True:
-      direction = raw_input('Movement direction:')
+      direction = input('Movement direction:')
       target_pose = copy.copy(current_ee_pose)
 
       if direction == 'q':
