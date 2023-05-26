@@ -57,7 +57,8 @@ class ur5e_arm():
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-    default_pos = (np.pi/180)*np.array([90.0, -120.0, 90.0, -77.0, -90.0, 180.0])
+    #default_pos = (np.pi/180)*np.array([90.0, -120.0, 90.0, -77.0, -90.0, 180.0])
+    default_pos = (np.pi/180)*np.array([76., -84., 90., -96., -90., 165.])
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
     daq_ref_pos = deepcopy(default_pos)
@@ -112,7 +113,7 @@ class ur5e_arm():
     wrench_global_error = np.zeros(6)
 
     joint_inertia = np.array([5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
-    joint_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
+    joint_stiffness = 350 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
     zeta = 1.0
 
     recent_data_focus_coeff = 0.99
@@ -146,6 +147,7 @@ class ur5e_arm():
         rospy.init_node('compliant_controller', anonymous=True)
         #start subscribers
         rospy.Subscriber("joint_command", JointState, self.joint_command_callback)
+        rospy.Subscriber("reset_wrench", Bool, self.reset_wrench_callback)
 
         #start robot state subscriber (detects fault or estop press)
         rospy.Subscriber('/ur_hardware_interface/safety_mode',SafetyMode, self.safety_callback)
@@ -215,6 +217,9 @@ class ur5e_arm():
         self.current_joint_state = deepcopy(data)
         self.current_joint_positions[self.joint_reorder] = data.position
         self.current_joint_velocities[self.joint_reorder] = data.velocity
+
+    def reset_wrench_callback(self, data):
+        self.first_wrench_callback = True
 
     def wrench_callback(self, data):
         self.current_wrench = np.array([data.wrench.force.x, data.wrench.force.y, data.wrench.force.z, data.wrench.torque.x, data.wrench.torque.y, data.wrench.torque.z])
@@ -446,7 +451,7 @@ class ur5e_arm():
         joint_pos_error = np.subtract(ref_pos, self.current_joint_positions)
         vel_ref_array = np.multiply(joint_pos_error, self.joint_p_gains_varaible)
 
-        self.joint_torque_error = self.force_torque_error_estimation(joint_pos_error, self.joint_torque_error, self.current_joint_torque)
+        #self.joint_torque_error = self.force_torque_error_estimation(joint_pos_error, self.joint_torque_error, self.current_joint_torque)
         joint_torque_after_correction = self.current_joint_torque - self.joint_torque_error
 
         acc = (joint_torque_after_correction + self.joint_stiffness * joint_pos_error
