@@ -78,8 +78,8 @@ class ur5e_position_controller(object):
             end_time = max_disp / speed
 
             if np.any(np.array(joint_disp) > self.max_joint_disp):
-                rospy.logerr('Requested movement is too large.')
-                return
+                rospy.logerr('Requested movement is too large: {}.'.format(joint_disp))
+                continue
 
             traj = [InterpolatedUnivariateSpline([0.,end_time],[current_joint_pos[i], target_joint_pos[i]],k=1) for i in range(6)]
             traj_vel = InterpolatedUnivariateSpline([0.,end_time/2, end_time], [0, 0.1, 0],k=1)
