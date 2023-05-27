@@ -32,13 +32,14 @@ class ur5e_position_controller(object):
 
         self.lower_lims = (np.pi/180)*np.array([5.0, -120.0, 5.0, -150.0, -175.0, 95.0])
         self.upper_lims = (np.pi/180)*np.array([175.0, 5.0, 175.0, 5.0, 5.0, 265.0])
-        self.max_joint_disp = np.array([0.2, 0.2, 0.2, 0.4, 0.4, 0.4])
+        self.max_joint_disp = np.array([0.2, 0.2, 0.2, 0.4, 0.4, 0.6])
 
         # MoveIt
         self.group_name = moveit_group
         self.ee_link = ee_link
         moveit_commander.roscpp_initialize(sys.argv)
         self.move_group = moveit_commander.MoveGroupCommander(self.group_name)
+        self.move_group.set_planning_time = 0.1
         #self.move_group.set_goal_position_tolerance(0.01)
         #self.move_group.set_goal_orientation_tolerance(0.1)
 
@@ -82,7 +83,7 @@ class ur5e_position_controller(object):
                 continue
 
             traj = [InterpolatedUnivariateSpline([0.,end_time],[current_joint_pos[i], target_joint_pos[i]],k=1) for i in range(6)]
-            traj_vel = InterpolatedUnivariateSpline([0.,end_time/2, end_time], [0, 0.1, 0],k=1)
+            traj_vel = InterpolatedUnivariateSpline([0.,end_time/2, end_time], [0, 0.05, 0],k=1)
             start_time, loop_time = time.time(), 0
 
             while loop_time < end_time:
