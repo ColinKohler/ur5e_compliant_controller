@@ -68,8 +68,8 @@ class ur5e_arm():
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
-    max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    max_joint_acc = 5.0 * np.array([1.0, 1.0, 1.0, 3.0, 3.0, 3.0])
+    max_joint_speeds = 1.5 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    max_joint_acc = 2.5 * np.array([1.0, 1.0, 1.0, 3.0, 3.0, 3.0])
     homing_joint_speeds = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.2])
     jogging_joint_speeds = 2.0 * homing_joint_speeds
     homing_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
