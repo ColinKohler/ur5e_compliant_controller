@@ -28,18 +28,20 @@ class ur5e_position_controller(object):
         self.joint_names = ['shoulder_lift_joint', 'shoulder_pan_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
         self.joint_positions = np.zeros(6)
         self.joint_reorder = [2,1,0,3,4,5]
-        self.prev_joint_command = None
         self.commands = Queue()
 
         self.lower_lims = (np.pi/180)*np.array([5.0, -120.0, 5.0, -150.0, -175.0, 95.0])
         self.upper_lims = (np.pi/180)*np.array([175.0, 5.0, 175.0, 5.0, 5.0, 265.0])
-        self.max_joint_disp = 0.2
+        self.max_joint_disp = np.array([0.2, 0.2, 0.2, 0.4, 0.4, 0.6])
 
         # MoveIt
         self.group_name = moveit_group
         self.ee_link = ee_link
         moveit_commander.roscpp_initialize(sys.argv)
         self.move_group = moveit_commander.MoveGroupCommander(self.group_name)
+        self.move_group.set_planning_time = 0.1
+        #self.move_group.set_goal_position_tolerance(0.01)
+        #self.move_group.set_goal_orientation_tolerance(0.1)
 
     def joint_state_callback(self, data):
         self.joint_positions[self.joint_reorder] = data.position
@@ -52,8 +54,6 @@ class ur5e_position_controller(object):
         print('Waiting for joint state...')
         while self.joint_state is None:
             time.sleep(1)
-
-        self.prev_joint_command = self.joint_state
 
         rate = rospy.Rate(1)
         print('Starting controller...')
@@ -70,20 +70,22 @@ class ur5e_position_controller(object):
             self.move_group.clear_pose_targets()
             target_joint_pos = np.array(list(traj.joint_trajectory.points[-1].positions))
 
-            print(current_joint_pos)
-            print(target_joint_pos)
+            rospy.loginfo('Current: {}'.format(current_joint_pos))
+            rospy.loginfo('Target: {}'.format(target_joint_pos))
 
             speed = 0.25
-            max_disp = np.max(np.abs(target_joint_pos-current_joint_pos))
+            joint_disp = np.abs(target_joint_pos-current_joint_pos)
+            max_disp = np.max(joint_disp)
             end_time = max_disp / speed
 
-            if max_disp > self.max_joint_disp:
-                rospy.logerr('Requested movement is too large.')
-                return
+            if np.any(np.array(joint_disp) > self.max_joint_disp):
+                rospy.logerr('Requested movement is too large: {}.'.format(joint_disp))
+                continue
 
             traj = [InterpolatedUnivariateSpline([0.,end_time],[current_joint_pos[i], target_joint_pos[i]],k=1) for i in range(6)]
-            traj_vel = InterpolatedUnivariateSpline([0.,end_time/2, end_time], [0, 0.1, 0],k=1)
+            traj_vel = InterpolatedUnivariateSpline([0.,end_time/2, end_time], [0, 0.05, 0],k=1)
             start_time, loop_time = time.time(), 0
+
             while loop_time < end_time:
                 loop_time = time.time() - start_time
                 joint_state = JointState(
@@ -97,8 +99,6 @@ class ur5e_position_controller(object):
                 velocity=[0] * 6
             )
             self.joint_command_pub.publish(joint_state)
-
-            self.prev_joint_command = joint_state
 
             rate.sleep()
 
