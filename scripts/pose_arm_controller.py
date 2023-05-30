@@ -40,8 +40,8 @@ class ur5e_position_controller(object):
         moveit_commander.roscpp_initialize(sys.argv)
         self.move_group = moveit_commander.MoveGroupCommander(self.group_name)
         self.move_group.set_planning_time = 0.1
-        #self.move_group.set_goal_position_tolerance(0.01)
-        #self.move_group.set_goal_orientation_tolerance(0.1)
+        self.move_group.set_goal_position_tolerance(0.01)
+        self.move_group.set_goal_orientation_tolerance(0.01)
 
     def joint_state_callback(self, data):
         self.joint_positions[self.joint_reorder] = data.position
@@ -65,9 +65,13 @@ class ur5e_position_controller(object):
                 command = self.commands.get()
 
             current_joint_pos = copy.copy(self.joint_positions)
+            self.move_group.clear_pose_targets()
             self.move_group.set_pose_target(command)
             success, traj, planning_time, err = self.move_group.plan()
-            self.move_group.clear_pose_targets()
+            if not success:
+                rospy.logerr('MoveIt planning/IK failed...')
+                continue
+
             target_joint_pos = np.array(list(traj.joint_trajectory.points[-1].positions))
 
             rospy.loginfo('Current: {}'.format(current_joint_pos))
@@ -83,7 +87,7 @@ class ur5e_position_controller(object):
                 continue
 
             traj = [InterpolatedUnivariateSpline([0.,end_time],[current_joint_pos[i], target_joint_pos[i]],k=1) for i in range(6)]
-            traj_vel = InterpolatedUnivariateSpline([0.,end_time/2, end_time], [0, 0.05, 0],k=1)
+            traj_vel = InterpolatedUnivariateSpline([0.,end_time/2, end_time], [0, 0.01, 0],k=1)
             start_time, loop_time = time.time(), 0
 
             while loop_time < end_time:
