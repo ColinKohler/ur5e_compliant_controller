@@ -87,7 +87,7 @@ class ur5e_position_controller(object):
                 continue
 
             traj = [InterpolatedUnivariateSpline([0.,end_time],[current_joint_pos[i], target_joint_pos[i]],k=1) for i in range(6)]
-            traj_vel = InterpolatedUnivariateSpline([0.,end_time/2, end_time], [0, 0.01, 0],k=1)
+            traj_vel = InterpolatedUnivariateSpline([0.,end_time/2, end_time], [0, 0.05, 0],k=1)
             start_time, loop_time = time.time(), 0
 
             while loop_time < end_time:
